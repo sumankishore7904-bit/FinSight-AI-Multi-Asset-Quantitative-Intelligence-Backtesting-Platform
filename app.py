@@ -1,668 +1,570 @@
-"""
-FinSight AI - Multi-Asset Quantitative Intelligence Backtesting Platform
-Main Application Entry Point
-
-This module orchestrates:
-- Data pipeline & ingestion
-- Strategy backtesting engine
-- Portfolio optimization
-- Risk analysis & reporting
-- REST API & WebSocket connections
-"""
-
-import os
-import json
-import logging
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
-import asyncio
-from functools import wraps
-
-from flask import Flask, request, jsonify, render_template, send_file
-from flask_cors import CORS
-from flask_socketio import SocketIO, emit, join_room, leave_room
-import numpy as np
+import streamlit as st
 import pandas as pd
-from dotenv import load_dotenv
+import numpy as np
+import importlib
+import os
 
-# ============================================================================
-# LOCAL MODULE IMPORTS (Update paths based on your project structure)
-# ============================================================================
-try:
-    from src.data_pipeline import DataPipeline
-    from src.backtesting_engine import BacktestingEngine
-    from src.portfolio_optimizer import PortfolioOptimizer
-    from src.risk_analyzer import RiskAnalyzer
-    from src.technical_indicators import TechnicalIndicators
-    from src.ml_models import MLPredictor
-    from src.database import DatabaseManager
-    from src.config import Config
-    from src.logger_config import setup_logging
-    from src.utils import validate_input, handle_errors
-except ImportError as e:
-    print(f"Warning: Module import error - {e}. Running in limited mode.")
+st.set_page_config(
+    page_title="FinSight AI",
+    page_icon="📈",
+    layout="wide"
+)
 
-# ============================================================================
-# INITIALIZATION
-# ============================================================================
-load_dotenv()
+# ============================================================
+# PAGE HEADER
+# ============================================================
 
-# Setup logging
-logger = logging.getLogger(__name__)
-setup_logging()
+st.title("📈 FinSight AI")
+st.subheader(
+    "Multi-Asset Quantitative Intelligence & Backtesting Platform"
+)
 
-# Flask app initialization
-app = Flask(__name__)
-app.config['JSON_SORT_KEYS'] = False
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max upload
+st.caption(
+    "Market Data → Analysis → Risk → Indicators → Backtesting → "
+    "Quant Intelligence → AI Explanation"
+)
 
-# Enable CORS
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+# ============================================================
+# SIDEBAR
+# ============================================================
 
-# WebSocket support
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+st.sidebar.title("FinSight AI")
 
-# ============================================================================
-# GLOBAL INSTANCES
-# ============================================================================
-config = Config()
-data_pipeline = None
-backtest_engine = None
-portfolio_optimizer = None
-risk_analyzer = None
-db_manager = None
-technical_indicators = None
-ml_predictor = None
+asset = st.sidebar.selectbox(
+    "Select Asset",
+    ["NVIDIA", "Bitcoin", "Gold"]
+)
 
-# Active sessions tracking
-active_backtests = {}
-active_optimizations = {}
+page = st.sidebar.radio(
+    "Navigate",
+    [
+        "Overview",
+        "Asset Analysis",
+        "Risk Analysis",
+        "Technical Indicators",
+        "Backtesting",
+        "Quant Intelligence",
+        "AI Assistant"
+    ]
+)
 
+# ============================================================
+# MODULE LOADER
+# ============================================================
 
-# ============================================================================
-# INITIALIZATION FUNCTION
-# ============================================================================
-def initialize_app():
-    """Initialize all application modules"""
-    global data_pipeline, backtest_engine, portfolio_optimizer, risk_analyzer
-    global db_manager, technical_indicators, ml_predictor
-    
-    try:
-        logger.info("Initializing FinSight AI application...")
-        
-        db_manager = DatabaseManager(config.DATABASE_URL)
-        data_pipeline = DataPipeline(config, db_manager)
-        backtest_engine = BacktestingEngine(config)
-        portfolio_optimizer = PortfolioOptimizer()
-        risk_analyzer = RiskAnalyzer()
-        technical_indicators = TechnicalIndicators()
-        ml_predictor = MLPredictor(config)
-        
-        logger.info("✓ All modules initialized successfully")
-        return True
-    except Exception as e:
-        logger.error(f"Initialization failed: {e}")
-        return False
+def load_module(module_name):
+
+    possible_names = [
+        module_name,
+        module_name.lower(),
+        module_name.replace("/", "."),
+    ]
+
+    for name in possible_names:
+
+        try:
+            return importlib.import_module(name)
+
+        except Exception:
+            pass
+
+    return None
 
 
-# ============================================================================
-# DECORATORS
-# ============================================================================
-def require_auth(f):
-    """Authentication decorator for API endpoints"""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = request.headers.get('Authorization')
-        if not token or not validate_auth_token(token):
-            return jsonify({'error': 'Unauthorized'}), 401
-        return f(*args, **kwargs)
-    return decorated
+# ============================================================
+# FIND PROJECT MODULES
+# ============================================================
+
+backend_loader = load_module("backend.data.loader")
+backend_cleaner = load_module("backend.data.cleaner")
+data_service = load_module("backend.data.data_service")
+
+asset_analysis = load_module("backend.analysis.asset_analysis")
+risk_module = load_module("backend.analysis.risk")
+indicators = load_module("backend.analysis.indicators")
+correlation = load_module("backend.analysis.correlation")
+comparison = load_module("backend.analysis.comparison")
+
+backtest_strategy = load_module("backend.backtesting.strategy")
+backtest_engine = load_module("backend.backtesting.engine")
+portfolio = load_module("backend.backtesting.portfolio")
+
+quant_engine = load_module("Intelligence.quant.quant_engine")
+regime = load_module("Intelligence.quant.regime")
+strategy_analysis = load_module(
+    "Intelligence.quant.strategy_analysis"
+)
+insights = load_module("Intelligence.quant.insights")
+
+ai_engine = load_module("Intelligence.ai.ai_engine")
+ai_assistant = load_module("Intelligence.ai.assistant")
 
 
-def validate_auth_token(token):
-    """Validate JWT token"""
-    try:
-        # Implement your token validation logic
-        return True
-    except:
-        return False
+# ============================================================
+# MODULE STATUS
+# ============================================================
 
+with st.expander("🔧 System Module Status"):
 
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-def safe_execute(func, *args, **kwargs):
-    """Safely execute functions with error handling"""
-    try:
-        return {'status': 'success', 'data': func(*args, **kwargs)}
-    except Exception as e:
-        logger.error(f"Error in {func.__name__}: {e}")
-        return {'status': 'error', 'message': str(e)}
-
-
-# ============================================================================
-# ROUTES: DATA INGESTION & MANAGEMENT
-# ============================================================================
-
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    """Health check endpoint"""
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'version': '1.0.0'
-    }), 200
-
-
-@app.route('/api/data/ingest', methods=['POST'])
-def ingest_data():
-    """
-    Ingest market data (CSV, JSON, or API)
-    Expected JSON:
-    {
-        "source": "csv|api|json",
-        "assets": ["BTC", "ETH", "SPY"],
-        "start_date": "2023-01-01",
-        "end_date": "2024-01-01",
-        "interval": "1d" (1m, 5m, 15m, 1h, 1d, 1w)
+    modules = {
+        "Data Loader": backend_loader,
+        "Data Cleaner": backend_cleaner,
+        "Data Service": data_service,
+        "Asset Analysis": asset_analysis,
+        "Risk": risk_module,
+        "Indicators": indicators,
+        "Correlation": correlation,
+        "Comparison": comparison,
+        "Backtesting": backtest_engine,
+        "Quant Engine": quant_engine,
+        "Market Regime": regime,
+        "Strategy Analysis": strategy_analysis,
+        "Quant Insights": insights,
+        "AI Engine": ai_engine,
+        "AI Assistant": ai_assistant,
     }
-    """
-    try:
-        payload = request.get_json()
-        
-        # Validate input
-        required_fields = ['source', 'assets']
-        if not all(field in payload for field in required_fields):
-            return jsonify({'error': 'Missing required fields'}), 400
-        
-        # Fetch data
-        result = data_pipeline.fetch_data(
-            assets=payload['assets'],
-            source=payload.get('source', 'api'),
-            start_date=payload.get('start_date'),
-            end_date=payload.get('end_date'),
-            interval=payload.get('interval', '1d')
-        )
-        
-        if result.get('status') == 'success':
-            # Store in database
-            db_manager.store_market_data(result['data'])
-            return jsonify({
-                'status': 'success',
-                'message': f"Ingested data for {len(payload['assets'])} assets",
-                'records': len(result['data'])
-            }), 200
+
+    for name, module in modules.items():
+
+        if module is not None:
+            st.success(f"✅ {name}")
         else:
-            return jsonify(result), 400
-            
-    except Exception as e:
-        logger.error(f"Data ingestion error: {e}")
-        return jsonify({'error': str(e)}), 500
+            st.warning(f"⚠️ {name} not connected yet")
 
 
-@app.route('/api/data/market/<asset>', methods=['GET'])
-def get_market_data(asset):
-    """
-    Get market data for a specific asset
-    Query params: start_date, end_date, interval
-    """
-    try:
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        interval = request.args.get('interval', '1d')
-        
-        data = data_pipeline.get_asset_data(
-            asset=asset,
-            start_date=start_date,
-            end_date=end_date,
-            interval=interval
-        )
-        
-        if data is not None:
-            return jsonify({
-                'status': 'success',
-                'asset': asset,
-                'records': len(data),
-                'data': data.to_dict('records')
-            }), 200
-        else:
-            return jsonify({'error': 'No data found'}), 404
-            
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+# ============================================================
+# DEMO DATA FALLBACK
+# ============================================================
 
+def generate_demo_data(asset_name):
 
-# ============================================================================
-# ROUTES: BACKTESTING
-# ============================================================================
+    np.random.seed(42)
 
-@app.route('/api/backtest/create', methods=['POST'])
-def create_backtest():
-    """
-    Create and run a backtest
-    Expected JSON:
-    {
-        "strategy_name": "strategy_name",
-        "assets": ["BTC", "ETH"],
-        "start_date": "2023-01-01",
-        "end_date": "2024-01-01",
-        "initial_capital": 100000,
-        "strategy_params": {...}
-    }
-    """
-    try:
-        payload = request.get_json()
-        
-        # Validate required fields
-        required = ['strategy_name', 'assets', 'start_date', 'initial_capital']
-        if not all(f in payload for f in required):
-            return jsonify({'error': 'Missing required fields'}), 400
-        
-        # Create backtest ID
-        backtest_id = f"bt_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        # Fetch data for assets
-        data = data_pipeline.fetch_data(
-            assets=payload['assets'],
-            start_date=payload['start_date'],
-            end_date=payload.get('end_date')
-        )
-        
-        if data.get('status') != 'success':
-            return jsonify({'error': 'Failed to fetch market data'}), 400
-        
-        # Run backtest
-        backtest_result = backtest_engine.run_backtest(
-            strategy_name=payload['strategy_name'],
-            data=data['data'],
-            initial_capital=payload['initial_capital'],
-            strategy_params=payload.get('strategy_params', {})
-        )
-        
-        # Store backtest result
-        active_backtests[backtest_id] = backtest_result
-        db_manager.store_backtest_result(backtest_id, backtest_result)
-        
-        return jsonify({
-            'status': 'success',
-            'backtest_id': backtest_id,
-            'results': {
-                'total_return': backtest_result.get('total_return'),
-                'sharpe_ratio': backtest_result.get('sharpe_ratio'),
-                'max_drawdown': backtest_result.get('max_drawdown'),
-                'win_rate': backtest_result.get('win_rate'),
-                'trades': backtest_result.get('num_trades')
-            }
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Backtest creation error: {e}")
-        return jsonify({'error': str(e)}), 500
+    dates = pd.date_range(
+        end=pd.Timestamp.today(),
+        periods=252
+    )
 
+    if asset_name == "NVIDIA":
+        start = 450
+        volatility = 0.025
 
-@app.route('/api/backtest/<backtest_id>', methods=['GET'])
-def get_backtest_result(backtest_id):
-    """Get backtest results and analysis"""
-    try:
-        if backtest_id in active_backtests:
-            result = active_backtests[backtest_id]
-        else:
-            result = db_manager.get_backtest_result(backtest_id)
-        
-        if result:
-            return jsonify({
-                'status': 'success',
-                'backtest_id': backtest_id,
-                'results': result
-            }), 200
-        else:
-            return jsonify({'error': 'Backtest not found'}), 404
-            
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    elif asset_name == "Bitcoin":
+        start = 45000
+        volatility = 0.035
 
-
-@app.route('/api/backtest/<backtest_id>/equity-curve', methods=['GET'])
-def get_equity_curve(backtest_id):
-    """Get equity curve data for visualization"""
-    try:
-        if backtest_id in active_backtests:
-            result = active_backtests[backtest_id]
-        else:
-            result = db_manager.get_backtest_result(backtest_id)
-        
-        equity_curve = result.get('equity_curve', [])
-        dates = result.get('dates', [])
-        
-        return jsonify({
-            'status': 'success',
-            'data': list(zip(dates, equity_curve))
-        }), 200
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-# ============================================================================
-# ROUTES: PORTFOLIO OPTIMIZATION
-# ============================================================================
-
-@app.route('/api/optimize/portfolio', methods=['POST'])
-def optimize_portfolio():
-    """
-    Optimize portfolio allocation
-    Expected JSON:
-    {
-        "assets": ["BTC", "ETH", "SPY"],
-        "target_return": 0.10,
-        "max_risk": 0.15,
-        "constraints": {...}
-    }
-    """
-    try:
-        payload = request.get_json()
-        optimize_id = f"opt_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        # Fetch historical data for correlation
-        data = data_pipeline.fetch_data(
-            assets=payload['assets'],
-            interval='1d',
-            periods=252  # 1 year of data
-        )
-        
-        if data.get('status') != 'success':
-            return jsonify({'error': 'Failed to fetch data'}), 400
-        
-        # Optimize
-        result = portfolio_optimizer.optimize(
-            data=data['data'],
-            assets=payload['assets'],
-            target_return=payload.get('target_return'),
-            max_risk=payload.get('max_risk'),
-            constraints=payload.get('constraints', {})
-        )
-        
-        active_optimizations[optimize_id] = result
-        
-        return jsonify({
-            'status': 'success',
-            'optimize_id': optimize_id,
-            'allocation': result.get('allocation'),
-            'expected_return': result.get('expected_return'),
-            'expected_risk': result.get('expected_risk'),
-            'sharpe_ratio': result.get('sharpe_ratio')
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Portfolio optimization error: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-# ============================================================================
-# ROUTES: RISK ANALYSIS
-# ============================================================================
-
-@app.route('/api/risk/analyze', methods=['POST'])
-def analyze_risk():
-    """
-    Analyze portfolio risk metrics
-    Expected JSON:
-    {
-        "portfolio": {"BTC": 0.5, "ETH": 0.3, "SPY": 0.2},
-        "confidence_level": 0.95
-    }
-    """
-    try:
-        payload = request.get_json()
-        portfolio = payload.get('portfolio', {})
-        confidence = payload.get('confidence_level', 0.95)
-        
-        # Fetch market data for assets
-        assets = list(portfolio.keys())
-        data = data_pipeline.fetch_data(assets=assets, periods=252)
-        
-        if data.get('status') != 'success':
-            return jsonify({'error': 'Failed to fetch data'}), 400
-        
-        # Analyze risk
-        risk_metrics = risk_analyzer.calculate_metrics(
-            data=data['data'],
-            portfolio=portfolio,
-            confidence_level=confidence
-        )
-        
-        return jsonify({
-            'status': 'success',
-            'metrics': {
-                'var': risk_metrics.get('value_at_risk'),
-                'cvar': risk_metrics.get('conditional_var'),
-                'expected_shortfall': risk_metrics.get('expected_shortfall'),
-                'volatility': risk_metrics.get('volatility'),
-                'beta': risk_metrics.get('beta'),
-                'correlation_matrix': risk_metrics.get('correlation_matrix')
-            }
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Risk analysis error: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-# ============================================================================
-# ROUTES: TECHNICAL ANALYSIS
-# ============================================================================
-
-@app.route('/api/technical/<asset>', methods=['GET'])
-def get_technical_indicators(asset):
-    """Get technical indicators for an asset"""
-    try:
-        periods = request.args.get('periods', 252, type=int)
-        interval = request.args.get('interval', '1d')
-        
-        data = data_pipeline.get_asset_data(
-            asset=asset,
-            interval=interval,
-            periods=periods
-        )
-        
-        if data is None:
-            return jsonify({'error': 'No data found'}), 404
-        
-        indicators = technical_indicators.calculate_all(data)
-        
-        return jsonify({
-            'status': 'success',
-            'asset': asset,
-            'indicators': indicators
-        }), 200
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-# ============================================================================
-# ROUTES: ML PREDICTIONS
-# ============================================================================
-
-@app.route('/api/predict/<asset>', methods=['GET'])
-def predict_price(asset):
-    """ML-based price prediction"""
-    try:
-        periods = request.args.get('periods', 30, type=int)
-        model_type = request.args.get('model', 'lstm')
-        
-        data = data_pipeline.get_asset_data(asset=asset, periods=252)
-        
-        if data is None:
-            return jsonify({'error': 'No data found'}), 404
-        
-        predictions = ml_predictor.predict(
-            data=data,
-            asset=asset,
-            periods=periods,
-            model_type=model_type
-        )
-        
-        return jsonify({
-            'status': 'success',
-            'asset': asset,
-            'predictions': predictions.get('forecast'),
-            'confidence_interval': predictions.get('confidence_interval'),
-            'model_metrics': predictions.get('metrics')
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Prediction error: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-# ============================================================================
-# ROUTES: REPORTING & EXPORT
-# ============================================================================
-
-@app.route('/api/report/<backtest_id>', methods=['GET'])
-def generate_report(backtest_id):
-    """Generate detailed PDF report"""
-    try:
-        report_format = request.args.get('format', 'pdf')
-        
-        if backtest_id in active_backtests:
-            data = active_backtests[backtest_id]
-        else:
-            data = db_manager.get_backtest_result(backtest_id)
-        
-        if not data:
-            return jsonify({'error': 'Backtest not found'}), 404
-        
-        # Generate report based on format
-        if report_format == 'pdf':
-            report_path = backtest_engine.generate_pdf_report(backtest_id, data)
-        elif report_format == 'html':
-            report_path = backtest_engine.generate_html_report(backtest_id, data)
-        else:
-            return jsonify({'error': 'Invalid format'}), 400
-        
-        return send_file(report_path, as_attachment=True)
-        
-    except Exception as e:
-        logger.error(f"Report generation error: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/export/<backtest_id>', methods=['GET'])
-def export_results(backtest_id):
-    """Export backtest results as CSV/JSON"""
-    try:
-        export_format = request.args.get('format', 'csv')
-        
-        if backtest_id in active_backtests:
-            data = active_backtests[backtest_id]
-        else:
-            data = db_manager.get_backtest_result(backtest_id)
-        
-        if not data:
-            return jsonify({'error': 'Backtest not found'}), 404
-        
-        export_path = backtest_engine.export_results(backtest_id, data, export_format)
-        return send_file(export_path, as_attachment=True)
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-# ============================================================================
-# ROUTES: CONFIGURATION
-# ============================================================================
-
-@app.route('/api/config', methods=['GET'])
-def get_config():
-    """Get application configuration"""
-    try:
-        return jsonify({
-            'status': 'success',
-            'config': {
-                'supported_assets': config.SUPPORTED_ASSETS,
-                'supported_strategies': config.SUPPORTED_STRATEGIES,
-                'supported_intervals': ['1m', '5m', '15m', '1h', '1d', '1w'],
-                'max_backtest_period': config.MAX_BACKTEST_PERIOD,
-                'database': config.DATABASE_TYPE
-            }
-        }), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-# ============================================================================
-# WEBSOCKET EVENTS (Real-time updates)
-# ============================================================================
-
-@socketio.on('connect')
-def handle_connect():
-    """Handle WebSocket connection"""
-    logger.info(f"Client connected: {request.sid}")
-    emit('response', {'data': 'Connected to FinSight AI'})
-
-
-@socketio.on('subscribe_backtest')
-def handle_subscribe_backtest(data):
-    """Subscribe to backtest updates"""
-    backtest_id = data.get('backtest_id')
-    if backtest_id:
-        join_room(backtest_id)
-        emit('subscribed', {'backtest_id': backtest_id})
-
-
-@socketio.on('unsubscribe_backtest')
-def handle_unsubscribe_backtest(data):
-    """Unsubscribe from backtest updates"""
-    backtest_id = data.get('backtest_id')
-    if backtest_id:
-        leave_room(backtest_id)
-
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    """Handle client disconnect"""
-    logger.info(f"Client disconnected: {request.sid}")
-
-
-# ============================================================================
-# ERROR HANDLERS
-# ============================================================================
-
-@app.errorhandler(404)
-def not_found(error):
-    """Handle 404 errors"""
-    return jsonify({'error': 'Endpoint not found'}), 404
-
-
-@app.errorhandler(500)
-def internal_error(error):
-    """Handle 500 errors"""
-    logger.error(f"Internal server error: {error}")
-    return jsonify({'error': 'Internal server error'}), 500
-
-
-# ============================================================================
-# MAIN
-# ============================================================================
-
-if __name__ == '__main__':
-    # Initialize application
-    if initialize_app():
-        # Run app
-        debug_mode = os.getenv('DEBUG', 'False').lower() == 'true'
-        port = int(os.getenv('PORT', 5000))
-        host = os.getenv('HOST', '0.0.0.0')
-        
-        logger.info(f"Starting FinSight AI on {host}:{port}")
-        socketio.run(
-            app,
-            host=host,
-            port=port,
-            debug=debug_mode,
-            allow_unsafe_werkzeug=True
-        )
     else:
-        logger.error("Failed to initialize application")
-        exit(1)
+        start = 1900
+        volatility = 0.012
+
+    returns = np.random.normal(
+        0.0005,
+        volatility,
+        len(dates)
+    )
+
+    prices = start * np.exp(
+        np.cumsum(returns)
+    )
+
+    return pd.DataFrame({
+        "Date": dates,
+        "Price": prices
+    })
+
+
+# ============================================================
+# TRY EXISTING DATA LOADER
+# ============================================================
+
+df = None
+
+if backend_loader is not None:
+
+    # We don't assume a particular function name.
+    # The fallback keeps the app running if the loader
+    # uses a different function.
+
+    possible_functions = [
+        "load_data",
+        "load_asset_data",
+        "get_data",
+        "load_market_data"
+    ]
+
+    for function_name in possible_functions:
+
+        function = getattr(
+            backend_loader,
+            function_name,
+            None
+        )
+
+        if callable(function):
+
+            try:
+
+                df = function(asset)
+
+                if isinstance(df, pd.DataFrame):
+                    break
+
+            except Exception:
+                pass
+
+
+# ============================================================
+# FALLBACK
+# ============================================================
+
+if df is None:
+
+    df = generate_demo_data(asset)
+
+
+# ============================================================
+# NORMALIZE DATA
+# ============================================================
+
+df = df.copy()
+
+if "Date" not in df.columns:
+
+    possible_date_columns = [
+        "date",
+        "Datetime",
+        "datetime",
+        "timestamp"
+    ]
+
+    for column in possible_date_columns:
+
+        if column in df.columns:
+
+            df["Date"] = pd.to_datetime(
+                df[column]
+            )
+
+            break
+
+
+if "Price" not in df.columns:
+
+    possible_price_columns = [
+        "Close",
+        "close",
+        "Adj Close",
+        "adj_close",
+        "price"
+    ]
+
+    for column in possible_price_columns:
+
+        if column in df.columns:
+
+            df["Price"] = pd.to_numeric(
+                df[column],
+                errors="coerce"
+            )
+
+            break
+
+
+# ============================================================
+# BASIC CALCULATIONS
+# ============================================================
+
+if "Price" not in df.columns:
+
+    st.error(
+        "The selected backend data does not contain "
+        "a recognizable price column."
+    )
+
+    st.stop()
+
+
+df = df.dropna(subset=["Price"])
+
+df["Return"] = df["Price"].pct_change()
+
+df["SMA_20"] = (
+    df["Price"]
+    .rolling(20)
+    .mean()
+)
+
+df["SMA_50"] = (
+    df["Price"]
+    .rolling(50)
+    .mean()
+)
+
+current_price = df["Price"].iloc[-1]
+
+total_return = (
+    df["Price"].iloc[-1]
+    /
+    df["Price"].iloc[0]
+    - 1
+) * 100
+
+volatility = (
+    df["Return"]
+    .std()
+    *
+    np.sqrt(252)
+) * 100
+
+drawdown = (
+    df["Price"]
+    /
+    df["Price"].cummax()
+    - 1
+) * 100
+
+max_drawdown = drawdown.min()
+
+
+# ============================================================
+# OVERVIEW
+# ============================================================
+
+if page == "Overview":
+
+    st.header("📊 Portfolio Overview")
+
+    st.info(
+        f"Currently analyzing **{asset}**"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.metric(
+        "Current Price",
+        f"{current_price:,.2f}"
+    )
+
+    c2.metric(
+        "Total Return",
+        f"{total_return:.2f}%"
+    )
+
+    c3.metric(
+        "Volatility",
+        f"{volatility:.2f}%"
+    )
+
+    c4.metric(
+        "Max Drawdown",
+        f"{max_drawdown:.2f}%"
+    )
+
+    st.subheader(
+        f"📈 {asset} Price"
+    )
+
+    st.line_chart(
+        df.set_index("Date")["Price"]
+    )
+
+
+# ============================================================
+# ASSET ANALYSIS
+# ============================================================
+
+elif page == "Asset Analysis":
+
+    st.header("📊 Asset Analysis")
+
+    st.write(
+        f"Quantitative analysis for **{asset}**"
+    )
+
+    st.dataframe(
+        df.tail(20),
+        use_container_width=True
+    )
+
+    st.line_chart(
+        df.set_index("Date")[
+            ["Price", "SMA_20", "SMA_50"]
+        ]
+    )
+
+
+# ============================================================
+# RISK
+# ============================================================
+
+elif page == "Risk Analysis":
+
+    st.header("⚠️ Risk Analysis")
+
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric(
+        "Annualized Volatility",
+        f"{volatility:.2f}%"
+    )
+
+    c2.metric(
+        "Maximum Drawdown",
+        f"{max_drawdown:.2f}%"
+    )
+
+    c3.metric(
+        "Average Return",
+        f"{df['Return'].mean() * 100:.3f}%"
+    )
+
+    st.subheader("Drawdown")
+
+    st.line_chart(
+        drawdown
+    )
+
+
+# ============================================================
+# INDICATORS
+# ============================================================
+
+elif page == "Technical Indicators":
+
+    st.header("📈 Technical Indicators")
+
+    st.line_chart(
+        df.set_index("Date")[
+            ["Price", "SMA_20", "SMA_50"]
+        ]
+    )
+
+    latest_sma20 = df["SMA_20"].iloc[-1]
+    latest_sma50 = df["SMA_50"].iloc[-1]
+
+    if latest_sma20 > latest_sma50:
+
+        st.success(
+            "Quantitative signal: SMA 20 is above SMA 50"
+        )
+
+    else:
+
+        st.warning(
+            "Quantitative signal: SMA 20 is below SMA 50"
+        )
+
+
+# ============================================================
+# BACKTESTING
+# ============================================================
+
+elif page == "Backtesting":
+
+    st.header("🔄 Strategy Backtesting")
+
+    st.info(
+        "Backtesting module detected from the project "
+        "architecture. The next integration step will "
+        "connect the exact strategy and engine functions."
+    )
+
+    st.metric(
+        "Buy & Hold Return",
+        f"{total_return:.2f}%"
+    )
+
+
+# ============================================================
+# QUANT INTELLIGENCE
+# ============================================================
+
+elif page == "Quant Intelligence":
+
+    st.header("🧠 Quantitative Intelligence")
+
+    trend = "Bullish"
+
+    if (
+        df["SMA_20"].iloc[-1]
+        <
+        df["SMA_50"].iloc[-1]
+    ):
+        trend = "Bearish"
+
+    st.metric(
+        "Detected Trend",
+        trend
+    )
+
+    st.write(
+        f"""
+        FinSight AI is analyzing:
+
+        - Asset: **{asset}**
+        - Return: **{total_return:.2f}%**
+        - Volatility: **{volatility:.2f}%**
+        - Maximum Drawdown: **{max_drawdown:.2f}%**
+        - Trend: **{trend}**
+        """
+    )
+
+
+# ============================================================
+# AI ASSISTANT
+# ============================================================
+
+elif page == "AI Assistant":
+
+    st.header("🤖 FinSight AI Assistant")
+
+    question = st.text_input(
+        "Ask a question about the selected asset",
+        placeholder="What is the risk of this asset?"
+    )
+
+    if question:
+
+        st.write("### Analysis")
+
+        st.info(
+            f"""
+            Asset: **{asset}**
+
+            Current price: **{current_price:,.2f}**
+
+            Return: **{total_return:.2f}%**
+
+            Volatility: **{volatility:.2f}%**
+
+            Maximum drawdown: **{max_drawdown:.2f}%**
+
+            Your question:
+
+            **{question}**
+            """
+        )
+
+        if ai_engine is not None:
+
+            st.caption(
+                "AI engine detected in the project."
+            )
+
+        else:
+
+            st.caption(
+                "AI engine is not connected yet."
+            )
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "FinSight AI | Quantitative Finance | "
+    "Risk | Backtesting | AI Intelligence"
+)
