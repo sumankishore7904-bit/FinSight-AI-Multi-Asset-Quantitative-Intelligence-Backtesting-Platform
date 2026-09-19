@@ -1,13 +1,17 @@
 import os
+import sys
 import importlib
+import traceback
+from pathlib import Path
 
-import numpy as np
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import numpy as np
+import plotly.graph_objects as go
 
 
 # ============================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
@@ -19,62 +23,359 @@ st.set_page_config(
 
 
 # ============================================================
-# HEADER
+# PROJECT PATH
 # ============================================================
 
-st.title("📈 FinSight AI")
-st.subheader(
-    "Multi-Asset Quantitative Intelligence & Backtesting Platform"
-)
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data" / "raw"
 
-st.caption(
-    "Market Data → Analysis → Risk → Indicators → "
-    "Backtesting → Quant Intelligence → AI"
-)
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 
 # ============================================================
-# SIDEBAR - AUTOMATIC ASSET DETECTION
+# SESSION / DEBUG STORAGE
 # ============================================================
 
-st.sidebar.title("⚙️ FinSight AI")
+if "module_errors" not in st.session_state:
+    st.session_state.module_errors = {}
 
-DATA_FOLDER = "data/raw"
-
-assets = []
-
-if os.path.exists(DATA_FOLDER):
-
-    for file in sorted(os.listdir(DATA_FOLDER)):
-
-        if file.lower().endswith(".csv"):
-
-            asset_name = os.path.splitext(file)[0]
-
-            # Convert filename into readable name
-            asset_name = asset_name.replace("_", " ").replace("-", " ").title()
-
-            assets.append(asset_name)
+if "loaded_modules" not in st.session_state:
+    st.session_state.loaded_modules = {}
 
 
-# Fallback if no CSV files are found
-if not assets:
+# ============================================================
+# MODULE LOADER
+# ============================================================
 
-    assets = [
-        "NVIDIA",
-        "Bitcoin",
-        "Gold",
+def load_module(module_name):
+    """
+    Import a project module safely.
+
+    Returns:
+        module object if successful
+        None if failed
+
+    Errors are stored so the UI can show the exact reason.
+    """
+
+    try:
+        module = importlib.import_module(module_name)
+
+        st.session_state.loaded_modules[module_name] = True
+
+        # Remove old error if module now works
+        st.session_state.module_errors.pop(module_name, None)
+
+        return module
+
+    except Exception as e:
+
+        error_message = (
+            f"{type(e).__name__}: {str(e)}\n\n"
+            f"{traceback.format_exc()}"
+        )
+
+        st.session_state.module_errors[module_name] = error_message
+        st.session_state.loaded_modules[module_name] = False
+
+        return None
+
+
+# ============================================================
+# LOAD PROJECT MODULES
+# ============================================================
+
+MODULES = {
+
+    # ---------------- DATA ----------------
+    "Data Loader": "backend.data.loader",
+    "Data Cleaner": "backend.data.cleaner",
+    "Data Service": "backend.data.data_service",
+
+    # ---------------- ANALYSIS ----------------
+    "Asset Analysis": "backend.analysis.asset_analysis",
+    "Risk Analysis": "backend.analysis.risk",
+    "Technical Indicators": "backend.analysis.indicators",
+    "Correlation": "backend.analysis.correlation",
+    "Comparison": "backend.analysis.comparison",
+
+    # ---------------- BACKTESTING ----------------
+    "Backtesting Strategy": "backend.backtesting.strategy",
+    "Backtesting Engine": "backend.backtesting.engine",
+    "Portfolio": "backend.backtesting.portfolio",
+    "Transaction Costs": "backend.backtesting.transaction_costs",
+
+    # ---------------- QUANT ----------------
+    "Quant Engine": "Intelligence.quant.quant_engine",
+    "Market Regime": "Intelligence.quant.regime",
+    "Strategy Analysis": "Intelligence.quant.strategy_analysis",
+    "Quant Insights": "Intelligence.quant.insights",
+
+    # ---------------- AI ----------------
+    "AI Engine": "Intelligence.ai.ai_engine",
+    "AI Context Builder": "Intelligence.ai.context_builder",
+    "AI Prompts": "Intelligence.ai.prompts",
+    "AI Assistant": "Intelligence.ai.assistant",
+    "AI Fallback": "Intelligence.ai.fallback",
+}
+
+
+loaded = {}
+
+for display_name, module_name in MODULES.items():
+    loaded[display_name] = load_module(module_name)
+
+
+# ============================================================
+# CSV DISCOVERY
+# ============================================================
+
+def discover_csv_files():
+
+    if not DATA_DIR.exists():
+        return []
+
+    files = []
+
+    for file in DATA_DIR.iterdir():
+
+        if file.is_file() and file.suffix.lower() == ".csv":
+            files.append(file)
+
+    return sorted(files, key=lambda x: x.name.lower())
+
+
+csv_files = discover_csv_files()
+
+
+# ============================================================
+# DATA LOADING
+# ============================================================
+
+def load_csv(file_path):
+
+    try:
+
+        df = pd.read_csv(file_path)
+
+        if df.empty:
+            return None, "CSV is empty."
+
+        return df, None
+
+    except Exception as e:
+
+        return None, f"{type(e).__name__}: {e}"
+
+
+def normalize_dataframe(df):
+
+    df = df.copy()
+
+    # --------------------------------------------------------
+    # Detect date column
+    # --------------------------------------------------------
+
+    date_candidates = [
+        "Date",
+        "date",
+        "DATE",
+        "Datetime",
+        "datetime",
+        "Timestamp",
+        "timestamp",
     ]
 
+    date_column = None
 
-asset = st.sidebar.selectbox(
-    "📊 Select Asset",
-    assets
+    for col in date_candidates:
+
+        if col in df.columns:
+            date_column = col
+            break
+
+    if date_column:
+
+        df[date_column] = pd.to_datetime(
+            df[date_column],
+            errors="coerce"
+        )
+
+        df = df.dropna(subset=[date_column])
+
+        df = df.sort_values(date_column)
+
+        if date_column != "Date":
+            df.rename(columns={date_column: "Date"}, inplace=True)
+
+    # --------------------------------------------------------
+    # Detect price column
+    # --------------------------------------------------------
+
+    price_candidates = [
+        "Close",
+        "close",
+        "Price",
+        "price",
+        "Adj Close",
+        "adj_close",
+        "Adj_Close",
+    ]
+
+    price_column = None
+
+    for col in price_candidates:
+
+        if col in df.columns:
+            price_column = col
+            break
+
+    if price_column:
+
+        if price_column != "Price":
+            df["Price"] = pd.to_numeric(
+                df[price_column],
+                errors="coerce"
+            )
+        else:
+            df["Price"] = pd.to_numeric(
+                df["Price"],
+                errors="coerce"
+            )
+
+    return df
+
+
+# ============================================================
+# DEMO DATA FALLBACK
+# ============================================================
+
+def generate_demo_data():
+
+    dates = pd.date_range(
+        end=pd.Timestamp.today(),
+        periods=250,
+        freq="D"
+    )
+
+    np.random.seed(42)
+
+    prices = 100 * np.cumprod(
+        1 + np.random.normal(
+            0.0005,
+            0.02,
+            len(dates)
+        )
+    )
+
+    return pd.DataFrame(
+        {
+            "Date": dates,
+            "Price": prices,
+        }
+    )
+
+
+# ============================================================
+# BASIC ANALYSIS
+# ============================================================
+
+def prepare_analysis(df):
+
+    df = normalize_dataframe(df)
+
+    if "Price" not in df.columns:
+        return df
+
+    df["Return"] = df["Price"].pct_change()
+
+    df["SMA20"] = (
+        df["Price"]
+        .rolling(20)
+        .mean()
+    )
+
+    df["SMA50"] = (
+        df["Price"]
+        .rolling(50)
+        .mean()
+    )
+
+    df["Volatility"] = (
+        df["Return"]
+        .rolling(20)
+        .std()
+        * np.sqrt(252)
+    )
+
+    cumulative = (
+        1 + df["Return"].fillna(0)
+    ).cumprod()
+
+    running_max = cumulative.cummax()
+
+    df["Drawdown"] = (
+        cumulative / running_max
+    ) - 1
+
+    return df
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+st.sidebar.title("📈 FinSight AI")
+
+st.sidebar.caption(
+    "Multi-Asset Quantitative Intelligence "
+    "& Backtesting Platform"
 )
 
+st.sidebar.divider()
+
+
+# ============================================================
+# CSV LIST
+# ============================================================
+
+st.sidebar.subheader("📂 Assets")
+
+if csv_files:
+
+    csv_names = [
+        file.name
+        for file in csv_files
+    ]
+
+    selected_csv = st.sidebar.selectbox(
+        "Select Asset",
+        csv_names
+    )
+
+    selected_file = DATA_DIR / selected_csv
+
+    st.sidebar.success(
+        f"✅ {len(csv_files)} CSV files detected"
+    )
+
+else:
+
+    selected_csv = None
+    selected_file = None
+
+    st.sidebar.warning(
+        "⚠️ No CSV files found in data/raw/"
+    )
+
+
+# ============================================================
+# NAVIGATION
+# ============================================================
 
 page = st.sidebar.radio(
-    "📌 Navigation",
+    "Navigation",
     [
         "Overview",
         "Asset Analysis",
@@ -85,636 +386,49 @@ page = st.sidebar.radio(
         "Backtesting",
         "Quant Intelligence",
         "AI Assistant",
+        "System Diagnostics",
     ],
 )
 
 
 # ============================================================
-# MODULE LOADER
+# LOAD SELECTED DATA
 # ============================================================
 
-def load_module(module_name):
+if selected_file:
 
-    try:
-        return importlib.import_module(module_name)
-
-    except Exception:
-        return None
-
-
-# ============================================================
-# BACKEND MODULES
-# ============================================================
-
-backend_loader = load_module(
-    "backend.data.loader"
-)
-
-backend_cleaner = load_module(
-    "backend.data.cleaner"
-)
-
-data_service = load_module(
-    "backend.data.data_service"
-)
-
-
-asset_analysis = load_module(
-    "backend.analysis.asset_analysis"
-)
-
-risk_module = load_module(
-    "backend.analysis.risk"
-)
-
-indicators_module = load_module(
-    "backend.analysis.indicators"
-)
-
-correlation_module = load_module(
-    "backend.analysis.correlation"
-)
-
-comparison_module = load_module(
-    "backend.analysis.comparison"
-)
-
-
-# ============================================================
-# BACKTESTING MODULES
-# ============================================================
-
-backtest_strategy = load_module(
-    "backend.backtesting.strategy"
-)
-
-backtest_engine = load_module(
-    "backend.backtesting.engine"
-)
-
-portfolio_module = load_module(
-    "backend.backtesting.portfolio"
-)
-
-transaction_costs = load_module(
-    "backend.backtesting.transaction_costs"
-)
-
-
-# ============================================================
-# INTELLIGENCE MODULES
-# ============================================================
-
-quant_engine = load_module(
-    "Intelligence.quant.quant_engine"
-)
-
-regime_module = load_module(
-    "Intelligence.quant.regime"
-)
-
-strategy_analysis_module = load_module(
-    "Intelligence.quant.strategy_analysis"
-)
-
-insights_module = load_module(
-    "Intelligence.quant.insights"
-)
-
-
-# ============================================================
-# AI MODULES
-# ============================================================
-
-ai_engine = load_module(
-    "Intelligence.ai.ai_engine"
-)
-
-context_builder = load_module(
-    "Intelligence.ai.context_builder"
-)
-
-prompts_module = load_module(
-    "Intelligence.ai.prompts"
-)
-
-ai_assistant = load_module(
-    "Intelligence.ai.assistant"
-)
-
-fallback_module = load_module(
-    "Intelligence.ai.fallback"
-)
-
-
-# ============================================================
-# SYSTEM STATUS
-# ============================================================
-
-with st.sidebar.expander(
-    "🔧 System Module Status"
-):
-
-    modules = {
-
-        "Data Loader": backend_loader,
-
-        "Data Cleaner": backend_cleaner,
-
-        "Data Service": data_service,
-
-        "Asset Analysis": asset_analysis,
-
-        "Risk": risk_module,
-
-        "Indicators": indicators_module,
-
-        "Correlation": correlation_module,
-
-        "Comparison": comparison_module,
-
-        "Backtesting": backtest_engine,
-
-        "Quant Engine": quant_engine,
-
-        "Market Regime": regime_module,
-
-        "Strategy Analysis": strategy_analysis_module,
-
-        "Quant Insights": insights_module,
-
-        "AI Engine": ai_engine,
-
-        "AI Assistant": ai_assistant,
-    }
-
-
-    for name, module in modules.items():
-
-        if module is not None:
-
-            st.success(
-                f"✅ {name}"
-            )
-
-        else:
-
-            st.warning(
-                f"⚠️ {name} not connected yet"
-            )
-
-
-# ============================================================
-# FIND CSV FILE
-# ============================================================
-
-def find_asset_file(asset_name):
-
-    if not os.path.exists(DATA_FOLDER):
-        return None
-
-    target = (
-        asset_name
-        .lower()
-        .replace(" ", "_")
-        .replace("-", "_")
+    raw_df, csv_error = load_csv(
+        selected_file
     )
 
-    files = os.listdir(DATA_FOLDER)
+    if raw_df is not None:
 
-    # Exact filename match
-    for file in files:
-
-        if file.lower() == target + ".csv":
-
-            return os.path.join(
-                DATA_FOLDER,
-                file
-            )
-
-
-    # Partial filename match
-    for file in files:
-
-        if file.lower().endswith(".csv"):
-
-            filename = (
-                os.path.splitext(file)[0]
-                .lower()
-                .replace(" ", "_")
-                .replace("-", "_")
-            )
-
-            if target in filename:
-
-                return os.path.join(
-                    DATA_FOLDER,
-                    file
-                )
-
-    return None
-
-
-# ============================================================
-# LOAD CSV DIRECTLY
-# ============================================================
-
-def load_csv_asset(asset_name):
-
-    file_path = find_asset_file(
-        asset_name
-    )
-
-    if file_path is None:
-        return None
-
-    try:
-
-        data = pd.read_csv(
-            file_path
-        )
-
-        return data
-
-    except Exception as e:
-
-        st.error(
-            f"Error reading {file_path}: {e}"
-        )
-
-        return None
-
-
-# ============================================================
-# DEMO FALLBACK DATA
-# ============================================================
-
-def generate_demo_data(asset_name):
-
-    np.random.seed(42)
-
-    dates = pd.date_range(
-        end=pd.Timestamp.today(),
-        periods=252
-    )
-
-    if "Bitcoin" in asset_name:
-
-        start_price = 45000
-        volatility_value = 0.035
-
-    elif "Nvidia" in asset_name:
-
-        start_price = 450
-        volatility_value = 0.025
-
-    elif "Gold" in asset_name:
-
-        start_price = 1900
-        volatility_value = 0.012
+        df = prepare_analysis(raw_df)
 
     else:
 
-        start_price = 100
-        volatility_value = 0.02
+        df = generate_demo_data()
 
-
-    returns = np.random.normal(
-        0.0005,
-        volatility_value,
-        len(dates)
-    )
-
-    prices = (
-        start_price
-        *
-        np.exp(
-            np.cumsum(returns)
+        st.warning(
+            f"⚠️ Could not load `{selected_csv}`.\n\n"
+            f"{csv_error}"
         )
-    )
-
-
-    return pd.DataFrame({
-
-        "Date": dates,
-
-        "Price": prices,
-
-    })
-
-
-# ============================================================
-# TRY PROJECT DATA LOADER
-# ============================================================
-
-def try_backend_loader(asset_name):
-
-    if backend_loader is None:
-
-        return None
-
-
-    possible_functions = [
-
-        "load_data",
-
-        "load_asset_data",
-
-        "get_data",
-
-        "load_market_data",
-
-        "get_asset_data",
-
-    ]
-
-
-    for function_name in possible_functions:
-
-        function = getattr(
-            backend_loader,
-            function_name,
-            None
-        )
-
-
-        if not callable(function):
-            continue
-
-
-        try:
-
-            result = function(
-                asset_name
-            )
-
-
-            if isinstance(
-                result,
-                pd.DataFrame
-            ):
-
-                return result
-
-
-        except Exception:
-
-            continue
-
-
-    return None
-
-
-# ============================================================
-# LOAD DATA
-# ============================================================
-
-df = None
-
-
-# First try actual backend
-df = try_backend_loader(
-    asset
-)
-
-
-# If backend doesn't load it,
-# directly load the CSV
-if df is None:
-
-    df = load_csv_asset(
-        asset
-    )
-
-
-# If nothing is available,
-# generate fallback demo data
-if df is None:
-
-    df = generate_demo_data(
-        asset
-    )
-
-    using_demo_data = True
 
 else:
 
-    using_demo_data = False
+    df = generate_demo_data()
 
 
 # ============================================================
-# NORMALIZE DATA
+# HEADER
 # ============================================================
 
-df = df.copy()
+st.title("📈 FinSight AI")
 
-
-# -----------------------------
-# DATE COLUMN
-# -----------------------------
-
-if "Date" not in df.columns:
-
-    date_candidates = [
-
-        "date",
-
-        "datetime",
-
-        "Datetime",
-
-        "timestamp",
-
-        "Timestamp",
-
-    ]
-
-
-    for column in date_candidates:
-
-        if column in df.columns:
-
-            df["Date"] = pd.to_datetime(
-                df[column],
-                errors="coerce"
-            )
-
-            break
-
-
-# -----------------------------
-# PRICE COLUMN
-# -----------------------------
-
-if "Price" not in df.columns:
-
-    price_candidates = [
-
-        "Close",
-
-        "close",
-
-        "Adj Close",
-
-        "adj_close",
-
-        "price",
-
-        "Price",
-
-    ]
-
-
-    for column in price_candidates:
-
-        if column in df.columns:
-
-            df["Price"] = pd.to_numeric(
-                df[column],
-                errors="coerce"
-            )
-
-            break
-
-
-# ============================================================
-# CHECK PRICE DATA
-# ============================================================
-
-if "Price" not in df.columns:
-
-    st.error(
-        "❌ Could not find a price column in the selected dataset."
-    )
-
-    st.write(
-        "Available columns:"
-    )
-
-    st.write(
-        list(df.columns)
-    )
-
-    st.stop()
-
-
-# ============================================================
-# CLEAN DATA
-# ============================================================
-
-df["Price"] = pd.to_numeric(
-    df["Price"],
-    errors="coerce"
+st.caption(
+    "Multi-Asset Quantitative Intelligence "
+    "& Backtesting Platform"
 )
-
-df = df.dropna(
-    subset=["Price"]
-)
-
-
-if "Date" in df.columns:
-
-    df["Date"] = pd.to_datetime(
-        df["Date"],
-        errors="coerce"
-    )
-
-    df = df.dropna(
-        subset=["Date"]
-    )
-
-    df = df.sort_values(
-        "Date"
-    )
-
-
-# ============================================================
-# CALCULATE METRICS
-# ============================================================
-
-df["Return"] = (
-    df["Price"].pct_change()
-)
-
-
-df["SMA_20"] = (
-    df["Price"]
-    .rolling(20)
-    .mean()
-)
-
-
-df["SMA_50"] = (
-    df["Price"]
-    .rolling(50)
-    .mean()
-)
-
-
-current_price = (
-    df["Price"].iloc[-1]
-)
-
-
-total_return = (
-
-    (
-        df["Price"].iloc[-1]
-        /
-        df["Price"].iloc[0]
-    )
-
-    - 1
-
-) * 100
-
-
-volatility = (
-
-    df["Return"].std()
-    *
-    np.sqrt(252)
-
-) * 100
-
-
-drawdown = (
-
-    df["Price"]
-    /
-    df["Price"].cummax()
-
-    - 1
-
-) * 100
-
-
-max_drawdown = (
-    drawdown.min()
-)
-
-
-average_return = (
-    df["Return"].mean() * 100
-)
-
-
-# ============================================================
-# DATA SOURCE NOTICE
-# ============================================================
-
-if using_demo_data:
-
-    st.warning(
-        "⚠️ Demo data is being used because "
-        "the selected asset dataset could not be loaded."
-    )
-
-else:
-
-    st.success(
-        f"✅ Dataset loaded successfully for {asset}"
-    )
 
 
 # ============================================================
@@ -723,68 +437,99 @@ else:
 
 if page == "Overview":
 
-    st.header(
-        "📊 Portfolio Overview"
-    )
+    st.header("📊 Market Overview")
 
-
-    c1, c2, c3, c4 = st.columns(4)
-
-
-    c1.metric(
-        "Current Price",
-        f"{current_price:,.2f}"
-    )
-
-
-    c2.metric(
-        "Total Return",
-        f"{total_return:.2f}%"
-    )
-
-
-    c3.metric(
-        "Annualized Volatility",
-        f"{volatility:.2f}%"
-    )
-
-
-    c4.metric(
-        "Maximum Drawdown",
-        f"{max_drawdown:.2f}%"
-    )
-
-
-    st.subheader(
-        f"📈 {asset} Price History"
-    )
-
-
-    if "Date" in df.columns:
-
-        chart_data = (
-            df.set_index("Date")["Price"]
+    if selected_csv:
+        st.info(
+            f"Currently analyzing: **{selected_csv}**"
         )
 
-        st.line_chart(
-            chart_data
+    col1, col2, col3, col4 = st.columns(4)
+
+    if "Price" in df.columns:
+
+        current_price = df["Price"].iloc[-1]
+
+        previous_price = (
+            df["Price"].iloc[-2]
+            if len(df) > 1
+            else current_price
         )
 
-    else:
-
-        st.line_chart(
-            df["Price"]
+        change = (
+            current_price - previous_price
         )
 
+        return_pct = (
+            change / previous_price * 100
+            if previous_price != 0
+            else 0
+        )
 
-    st.subheader(
-        "📋 Latest Market Data"
-    )
+        col1.metric(
+            "Current Price",
+            f"{current_price:,.2f}"
+        )
+
+        col2.metric(
+            "Daily Change",
+            f"{return_pct:.2f}%"
+        )
+
+        col3.metric(
+            "Data Points",
+            f"{len(df):,}"
+        )
+
+        if "Volatility" in df.columns:
+
+            volatility = (
+                df["Volatility"]
+                .dropna()
+                .iloc[-1]
+                if not df["Volatility"].dropna().empty
+                else 0
+            )
+
+            col4.metric(
+                "Annualized Volatility",
+                f"{volatility * 100:.2f}%"
+            )
+
+    st.divider()
+
+    if "Price" in df.columns:
+
+        fig = go.Figure()
+
+        fig.add_trace(
+            go.Scatter(
+                x=df["Date"]
+                if "Date" in df.columns
+                else df.index,
+                y=df["Price"],
+                mode="lines",
+                name="Price",
+            )
+        )
+
+        fig.update_layout(
+            title="Price History",
+            xaxis_title="Date",
+            yaxis_title="Price",
+            height=500,
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
+
+    st.subheader("📄 Dataset Preview")
 
     st.dataframe(
         df.tail(10),
-        use_container_width=True,
-        hide_index=True
+        use_container_width=True
     )
 
 
@@ -794,57 +539,76 @@ if page == "Overview":
 
 elif page == "Asset Analysis":
 
-    st.header(
-        "📊 Asset Analysis"
-    )
+    st.header("🔎 Asset Analysis")
 
+    if "Price" not in df.columns:
 
-    st.write(
-        f"Analysis for **{asset}**"
-    )
-
-
-    c1, c2, c3 = st.columns(3)
-
-
-    c1.metric(
-        "Current Price",
-        f"{current_price:,.2f}"
-    )
-
-
-    c2.metric(
-        "Return",
-        f"{total_return:.2f}%"
-    )
-
-
-    c3.metric(
-        "Average Daily Return",
-        f"{average_return:.3f}%"
-    )
-
-
-    if "Date" in df.columns:
-
-        st.line_chart(
-
-            df.set_index("Date")[
-                ["Price"]
-            ]
-
+        st.error(
+            "The selected CSV does not contain "
+            "a recognizable Price/Close column."
         )
 
+    else:
 
-    st.subheader(
-        "Dataset"
-    )
+        col1, col2, col3 = st.columns(3)
 
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True
-    )
+        col1.metric(
+            "Highest Price",
+            f"{df['Price'].max():,.2f}"
+        )
+
+        col2.metric(
+            "Lowest Price",
+            f"{df['Price'].min():,.2f}"
+        )
+
+        col3.metric(
+            "Average Price",
+            f"{df['Price'].mean():,.2f}"
+        )
+
+        st.subheader("Price + Moving Averages")
+
+        fig = go.Figure()
+
+        x = (
+            df["Date"]
+            if "Date" in df.columns
+            else df.index
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=df["Price"],
+                name="Price",
+            )
+        )
+
+        if "SMA20" in df.columns:
+
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=df["SMA20"],
+                    name="SMA 20",
+                )
+            )
+
+        if "SMA50" in df.columns:
+
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=df["SMA50"],
+                    name="SMA 50",
+                )
+            )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
 
 
 # ============================================================
@@ -853,68 +617,67 @@ elif page == "Asset Analysis":
 
 elif page == "Risk Analysis":
 
-    st.header(
-        "⚠️ Risk Analysis"
-    )
+    st.header("⚠️ Risk Analysis")
 
+    if "Return" in df.columns:
 
-    c1, c2, c3 = st.columns(3)
+        volatility = (
+            df["Return"].std()
+            * np.sqrt(252)
+        )
 
+        max_drawdown = (
+            df["Drawdown"].min()
+            if "Drawdown" in df.columns
+            else np.nan
+        )
 
-    c1.metric(
-        "Annualized Volatility",
-        f"{volatility:.2f}%"
-    )
+        col1, col2 = st.columns(2)
 
+        col1.metric(
+            "Annualized Volatility",
+            f"{volatility * 100:.2f}%"
+        )
 
-    c2.metric(
-        "Maximum Drawdown",
-        f"{max_drawdown:.2f}%"
-    )
+        col2.metric(
+            "Maximum Drawdown",
+            f"{max_drawdown * 100:.2f}%"
+            if not np.isnan(max_drawdown)
+            else "N/A"
+        )
 
+        if "Drawdown" in df.columns:
 
-    c3.metric(
-        "Average Return",
-        f"{average_return:.3f}%"
-    )
+            fig = go.Figure()
 
-
-    st.subheader(
-        "Drawdown"
-    )
-
-
-    if "Date" in df.columns:
-
-        st.line_chart(
-
-            drawdown.rename(
-                "Drawdown"
-            ).set_axis(
+            x = (
                 df["Date"]
+                if "Date" in df.columns
+                else df.index
             )
 
-        )
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=df["Drawdown"] * 100,
+                    mode="lines",
+                    name="Drawdown",
+                )
+            )
+
+            fig.update_layout(
+                yaxis_title="Drawdown (%)"
+            )
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
 
     else:
 
-        st.line_chart(
-            drawdown
-        )
-
-
-    if risk_module is not None:
-
-        st.success(
-            "✅ Risk analysis module detected."
-        )
-
-    else:
-
-        st.info(
-            "The Risk module is present in the project "
-            "but its exact function interface still needs "
-            "to be connected."
+        st.warning(
+            "Return data could not be calculated."
         )
 
 
@@ -924,79 +687,73 @@ elif page == "Risk Analysis":
 
 elif page == "Technical Indicators":
 
-    st.header(
-        "📈 Technical Indicators"
-    )
+    st.header("📐 Technical Indicators")
 
+    if "Price" in df.columns:
 
-    if "Date" in df.columns:
+        col1, col2 = st.columns(2)
 
-        chart_data = (
-            df.set_index("Date")[
-                ["Price", "SMA_20", "SMA_50"]
-            ]
+        latest_sma20 = (
+            df["SMA20"].dropna().iloc[-1]
+            if not df["SMA20"].dropna().empty
+            else np.nan
         )
 
-    else:
-
-        chart_data = df[
-            ["Price", "SMA_20", "SMA_50"]
-        ]
-
-
-    st.line_chart(
-        chart_data
-    )
-
-
-    latest_sma20 = (
-        df["SMA_20"].iloc[-1]
-    )
-
-    latest_sma50 = (
-        df["SMA_50"].iloc[-1]
-    )
-
-
-    c1, c2 = st.columns(2)
-
-
-    c1.metric(
-        "SMA 20",
-        f"{latest_sma20:,.2f}"
-    )
-
-
-    c2.metric(
-        "SMA 50",
-        f"{latest_sma50:,.2f}"
-    )
-
-
-    if latest_sma20 > latest_sma50:
-
-        st.success(
-            "SMA 20 is currently above SMA 50."
+        latest_sma50 = (
+            df["SMA50"].dropna().iloc[-1]
+            if not df["SMA50"].dropna().empty
+            else np.nan
         )
 
-    else:
-
-        st.warning(
-            "SMA 20 is currently below SMA 50."
+        col1.metric(
+            "SMA 20",
+            f"{latest_sma20:,.2f}"
+            if not np.isnan(latest_sma20)
+            else "N/A"
         )
 
-
-    if indicators_module is not None:
-
-        st.success(
-            "✅ Technical Indicators module detected."
+        col2.metric(
+            "SMA 50",
+            f"{latest_sma50:,.2f}"
+            if not np.isnan(latest_sma50)
+            else "N/A"
         )
 
-    else:
+        fig = go.Figure()
 
-        st.info(
-            "Technical Indicators module still needs "
-            "its exact function interface connected."
+        x = (
+            df["Date"]
+            if "Date" in df.columns
+            else df.index
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=df["Price"],
+                name="Price",
+            )
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=df["SMA20"],
+                name="SMA 20",
+            )
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=df["SMA50"],
+                name="SMA 50",
+            )
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
         )
 
 
@@ -1006,116 +763,85 @@ elif page == "Technical Indicators":
 
 elif page == "Correlation":
 
-    st.header(
-        "🔗 Multi-Asset Correlation"
-    )
+    st.header("🔗 Asset Correlation")
 
+    if len(csv_files) < 2:
 
-    st.info(
-        "Correlation analysis requires multiple asset "
-        "datasets loaded together."
-    )
+        st.info(
+            "At least two CSV files are required "
+            "for correlation analysis."
+        )
 
+    else:
 
-    csv_files = []
-
-
-    if os.path.exists(DATA_FOLDER):
-
-        csv_files = [
-
-            file
-
-            for file in os.listdir(DATA_FOLDER)
-
-            if file.lower().endswith(".csv")
-
-        ]
-
-
-    if len(csv_files) >= 2:
-
-        prices = {}
-
+        price_data = {}
 
         for file in csv_files:
 
-            try:
+            temp_df, error = load_csv(file)
 
-                temp = pd.read_csv(
-                    os.path.join(
-                        DATA_FOLDER,
-                        file
-                    )
-                )
-
-
-                price_column = None
-
-
-                for column in [
-                    "Close",
-                    "close",
-                    "Adj Close",
-                    "Price",
-                    "price",
-                ]:
-
-                    if column in temp.columns:
-
-                        price_column = column
-
-                        break
-
-
-                if price_column:
-
-                    name = os.path.splitext(
-                        file
-                    )[0]
-
-                    prices[name] = pd.to_numeric(
-                        temp[price_column],
-                        errors="coerce"
-                    )
-
-
-            except Exception:
-
+            if temp_df is None:
                 continue
 
+            temp_df = normalize_dataframe(temp_df)
 
-        if len(prices) >= 2:
+            if "Price" in temp_df.columns:
+
+                price_data[file.stem] = (
+                    temp_df["Price"]
+                    .reset_index(drop=True)
+                )
+
+        if len(price_data) >= 2:
+
+            min_length = min(
+                len(series)
+                for series in price_data.values()
+            )
+
+            aligned = {
+                name: series.iloc[:min_length].values
+                for name, series
+                in price_data.items()
+            }
 
             correlation_df = pd.DataFrame(
-                prices
+                aligned
             ).corr()
-
 
             st.dataframe(
                 correlation_df,
                 use_container_width=True
             )
 
+            fig = go.Figure(
+                data=go.Heatmap(
+                    z=correlation_df.values,
+                    x=correlation_df.columns,
+                    y=correlation_df.columns,
+                    text=np.round(
+                        correlation_df.values,
+                        2
+                    ),
+                    texttemplate="%{text}",
+                )
+            )
+
+            fig.update_layout(
+                title="Correlation Matrix"
+            )
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True
+            )
+
         else:
 
             st.warning(
-                "Not enough compatible price datasets."
+                "Not enough valid price datasets "
+                "for correlation."
             )
-
-    else:
-
-        st.warning(
-            "Add at least two CSV datasets to "
-            "perform correlation analysis."
-        )
-
-
-    if correlation_module is not None:
-
-        st.success(
-            "✅ Correlation module detected."
-        )
 
 
 # ============================================================
@@ -1124,131 +850,73 @@ elif page == "Correlation":
 
 elif page == "Comparison":
 
-    st.header(
-        "📊 Asset Comparison"
-    )
+    st.header("⚖️ Asset Comparison")
 
-
-    csv_files = []
-
-
-    if os.path.exists(DATA_FOLDER):
-
-        csv_files = [
-
-            file
-
-            for file in os.listdir(DATA_FOLDER)
-
-            if file.lower().endswith(".csv")
-
-        ]
-
-
-    comparison_rows = []
-
+    comparison_data = []
 
     for file in csv_files:
 
-        try:
+        temp_df, error = load_csv(file)
 
-            temp = pd.read_csv(
-                os.path.join(
-                    DATA_FOLDER,
-                    file
-                )
-            )
-
-
-            price_column = None
-
-
-            for column in [
-                "Close",
-                "close",
-                "Adj Close",
-                "Price",
-                "price",
-            ]:
-
-                if column in temp.columns:
-
-                    price_column = column
-
-                    break
-
-
-            if price_column:
-
-                prices = pd.to_numeric(
-                    temp[price_column],
-                    errors="coerce"
-                ).dropna()
-
-
-                if len(prices) > 1:
-
-                    asset_name = (
-                        os.path.splitext(file)[0]
-                        .replace("_", " ")
-                        .title()
-                    )
-
-
-                    asset_return = (
-
-                        (
-                            prices.iloc[-1]
-                            /
-                            prices.iloc[0]
-                        )
-
-                        - 1
-
-                    ) * 100
-
-
-                    comparison_rows.append({
-
-                        "Asset": asset_name,
-
-                        "Current Price":
-                            prices.iloc[-1],
-
-                        "Return (%)":
-                            asset_return,
-
-                    })
-
-
-        except Exception:
-
+        if temp_df is None:
             continue
 
+        temp_df = normalize_dataframe(temp_df)
 
-    if comparison_rows:
+        if "Price" not in temp_df.columns:
+            continue
+
+        first_price = temp_df["Price"].iloc[0]
+        last_price = temp_df["Price"].iloc[-1]
+
+        total_return = (
+            (last_price / first_price) - 1
+        ) * 100
+
+        comparison_data.append(
+            {
+                "Asset": file.stem,
+                "Start Price": first_price,
+                "End Price": last_price,
+                "Total Return %": total_return,
+            }
+        )
+
+    if comparison_data:
 
         comparison_df = pd.DataFrame(
-            comparison_rows
+            comparison_data
         )
 
         st.dataframe(
             comparison_df,
-            use_container_width=True,
-            hide_index=True
+            use_container_width=True
+        )
+
+        fig = go.Figure()
+
+        fig.add_trace(
+            go.Bar(
+                x=comparison_df["Asset"],
+                y=comparison_df["Total Return %"],
+                name="Return %",
+            )
+        )
+
+        fig.update_layout(
+            title="Asset Return Comparison",
+            yaxis_title="Return (%)",
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
         )
 
     else:
 
         st.warning(
-            "No compatible datasets found."
-        )
-
-
-    if comparison_module is not None:
-
-        st.success(
-            "✅ Comparison module detected."
+            "No valid assets available."
         )
 
 
@@ -1258,73 +926,102 @@ elif page == "Comparison":
 
 elif page == "Backtesting":
 
-    st.header(
-        "🔄 Strategy Backtesting"
-    )
-
+    st.header("🧪 Backtesting")
 
     st.info(
-        "Backtesting interface"
+        "The existing backtesting modules are "
+        "detected below. Exact strategy execution "
+        "will use the functions available in your "
+        "repository."
     )
 
+    for name in [
+        "Backtesting Strategy",
+        "Backtesting Engine",
+        "Portfolio",
+        "Transaction Costs",
+    ]:
 
-    initial_capital = st.number_input(
-        "Initial Capital",
-        min_value=1000.0,
-        value=100000.0,
-        step=1000.0
-    )
+        if loaded.get(name):
 
+            st.success(
+                f"✅ {name} module loaded"
+            )
 
-    buy_and_hold_value = (
+        else:
 
-        initial_capital
-        *
-        (
+            st.error(
+                f"❌ {name} module failed"
+            )
+
+    st.subheader("Simple SMA Strategy Preview")
+
+    if "Price" in df.columns:
+
+        df_bt = df.copy()
+
+        df_bt["Signal"] = np.where(
+            df_bt["SMA20"] > df_bt["SMA50"],
+            1,
+            0
+        )
+
+        df_bt["Strategy Return"] = (
+            df_bt["Signal"].shift(1)
+            * df_bt["Return"]
+        )
+
+        cumulative_strategy = (
             1
-            +
-            total_return / 100
+            + df_bt["Strategy Return"]
+            .fillna(0)
+        ).cumprod()
+
+        cumulative_market = (
+            1
+            + df_bt["Return"]
+            .fillna(0)
+        ).cumprod()
+
+        col1, col2 = st.columns(2)
+
+        col1.metric(
+            "Strategy Return",
+            f"{(cumulative_strategy.iloc[-1] - 1) * 100:.2f}%"
         )
 
-    )
-
-
-    strategy_return = (
-        total_return
-    )
-
-
-    c1, c2 = st.columns(2)
-
-
-    c1.metric(
-        "Initial Capital",
-        f"₹{initial_capital:,.2f}"
-    )
-
-
-    c2.metric(
-        "Final Value",
-        f"₹{buy_and_hold_value:,.2f}"
-    )
-
-
-    st.metric(
-        "Buy & Hold Return",
-        f"{strategy_return:.2f}%"
-    )
-
-
-    if backtest_engine is not None:
-
-        st.success(
-            "✅ Backtesting Engine detected."
+        col2.metric(
+            "Buy & Hold Return",
+            f"{(cumulative_market.iloc[-1] - 1) * 100:.2f}%"
         )
 
-    else:
+        fig = go.Figure()
 
-        st.warning(
-            "⚠️ Backtesting Engine is not connected yet."
+        x = (
+            df_bt["Date"]
+            if "Date" in df_bt.columns
+            else df_bt.index
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=cumulative_strategy,
+                name="SMA Strategy",
+            )
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=cumulative_market,
+                name="Buy & Hold",
+            )
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
         )
 
 
@@ -1334,97 +1031,65 @@ elif page == "Backtesting":
 
 elif page == "Quant Intelligence":
 
-    st.header(
-        "🧠 Quantitative Intelligence"
-    )
+    st.header("🧠 Quant Intelligence")
 
+    quant_modules = [
+        "Quant Engine",
+        "Market Regime",
+        "Strategy Analysis",
+        "Quant Insights",
+    ]
 
-    latest_sma20 = (
-        df["SMA_20"].iloc[-1]
-    )
+    for name in quant_modules:
 
-    latest_sma50 = (
-        df["SMA_50"].iloc[-1]
-    )
+        if loaded.get(name):
 
+            st.success(
+                f"✅ {name} connected"
+            )
 
-    if latest_sma20 > latest_sma50:
+        else:
 
-        trend = "Bullish"
+            st.error(
+                f"❌ {name} failed"
+            )
 
-    else:
+    if "Price" in df.columns:
 
-        trend = "Bearish"
-
-
-    c1, c2, c3 = st.columns(3)
-
-
-    c1.metric(
-        "Trend",
-        trend
-    )
-
-
-    c2.metric(
-        "Return",
-        f"{total_return:.2f}%"
-    )
-
-
-    c3.metric(
-        "Volatility",
-        f"{volatility:.2f}%"
-    )
-
-
-    st.subheader(
-        "Quantitative Summary"
-    )
-
-
-    st.write(
-        f"""
-        **Asset:** {asset}
-
-        **Current Price:** {current_price:,.2f}
-
-        **Total Return:** {total_return:.2f}%
-
-        **Annualized Volatility:** {volatility:.2f}%
-
-        **Maximum Drawdown:** {max_drawdown:.2f}%
-
-        **Detected Trend:** {trend}
-        """
-    )
-
-
-    if quant_engine is not None:
-
-        st.success(
-            "✅ Quant Engine connected."
+        latest_return = (
+            df["Return"].dropna().iloc[-1]
+            if not df["Return"].dropna().empty
+            else 0
         )
 
-
-    if regime_module is not None:
-
-        st.success(
-            "✅ Market Regime module connected."
+        latest_volatility = (
+            df["Volatility"].dropna().iloc[-1]
+            if not df["Volatility"].dropna().empty
+            else 0
         )
 
+        st.subheader("Quant Snapshot")
 
-    if strategy_analysis_module is not None:
+        col1, col2, col3 = st.columns(3)
 
-        st.success(
-            "✅ Strategy Analysis connected."
+        col1.metric(
+            "Latest Return",
+            f"{latest_return * 100:.2f}%"
         )
 
+        col2.metric(
+            "Volatility",
+            f"{latest_volatility * 100:.2f}%"
+        )
 
-    if insights_module is not None:
-
-        st.success(
-            "✅ Quant Insights connected."
+        col3.metric(
+            "Trend",
+            (
+                "Bullish"
+                if df["SMA20"].iloc[-1]
+                > df["SMA50"].iloc[-1]
+                else "Bearish"
+            )
         )
 
 
@@ -1434,66 +1099,459 @@ elif page == "Quant Intelligence":
 
 elif page == "AI Assistant":
 
-    st.header(
-        "🤖 FinSight AI Assistant"
+    st.header("🤖 FinSight AI Assistant")
+
+    st.write(
+        "Ask questions about the selected financial dataset."
     )
 
+    # --------------------------------------------------------
+    # AI MODULE STATUS
+    # --------------------------------------------------------
 
-    question = st.text_input(
-        "Ask about the selected asset",
-        placeholder=(
-            "Example: What is the risk of this asset?"
+    st.subheader("AI System Status")
+
+    ai_module_names = [
+        "AI Engine",
+        "AI Context Builder",
+        "AI Prompts",
+        "AI Assistant",
+        "AI Fallback",
+    ]
+
+    for name in ai_module_names:
+
+        if loaded.get(name):
+
+            st.success(
+                f"✅ {name} loaded"
+            )
+
+        else:
+
+            st.error(
+                f"❌ {name} failed"
+            )
+
+    # --------------------------------------------------------
+    # API KEY CHECK
+    # --------------------------------------------------------
+
+    api_key_found = False
+
+    possible_keys = [
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_GEMINI_API_KEY",
+    ]
+
+    for key_name in possible_keys:
+
+        if os.getenv(key_name):
+
+            api_key_found = True
+            break
+
+        try:
+
+            if key_name in st.secrets:
+                api_key_found = True
+                break
+
+        except Exception:
+            pass
+
+    if api_key_found:
+
+        st.success("🔑 AI API key detected")
+
+    else:
+
+        st.warning(
+            "⚠️ No Gemini/Google API key detected. "
+            "Check Streamlit Cloud → Settings → Secrets."
         )
-    )
 
+    # --------------------------------------------------------
+    # CONTEXT
+    # --------------------------------------------------------
 
-    if question:
+    st.subheader("Current Dataset Context")
 
-        st.subheader(
-            "🧠 Quantitative Context"
-        )
-
+    if selected_csv:
 
         st.write(
-            f"""
-            **Asset:** {asset}
-
-            **Current Price:** {current_price:,.2f}
-
-            **Total Return:** {total_return:.2f}%
-
-            **Volatility:** {volatility:.2f}%
-
-            **Maximum Drawdown:** {max_drawdown:.2f}%
-
-            **Question:** {question}
-            """
+            f"**Asset:** `{selected_csv}`"
         )
 
+    if "Price" in df.columns:
 
-        if ai_engine is not None:
+        context = {
+            "Current Price":
+                float(df["Price"].iloc[-1]),
+
+            "Data Points":
+                int(len(df)),
+
+            "Average Price":
+                float(df["Price"].mean()),
+
+            "Volatility":
+                float(
+                    df["Return"].std()
+                    * np.sqrt(252)
+                )
+                if "Return" in df.columns
+                else None,
+
+            "Maximum Drawdown":
+                float(df["Drawdown"].min())
+                if "Drawdown" in df.columns
+                else None,
+        }
+
+        st.json(context)
+
+    # --------------------------------------------------------
+    # CHAT
+    # --------------------------------------------------------
+
+    user_question = st.chat_input(
+        "Ask FinSight AI about this asset..."
+    )
+
+    if user_question:
+
+        st.chat_message("user").write(
+            user_question
+        )
+
+        # ----------------------------------------------------
+        # Try existing AI assistant
+        # ----------------------------------------------------
+
+        assistant_module = loaded.get(
+            "AI Assistant"
+        )
+
+        ai_response = None
+
+        if assistant_module:
+
+            possible_functions = [
+                "ask",
+                "chat",
+                "answer",
+                "run",
+                "generate_response",
+                "get_response",
+            ]
+
+            for function_name in possible_functions:
+
+                function = getattr(
+                    assistant_module,
+                    function_name,
+                    None
+                )
+
+                if callable(function):
+
+                    try:
+
+                        ai_response = function(
+                            user_question
+                        )
+
+                        break
+
+                    except TypeError:
+
+                        try:
+
+                            ai_response = function(
+                                question=user_question
+                            )
+
+                            break
+
+                        except Exception:
+                            pass
+
+                    except Exception as e:
+
+                        st.error(
+                            f"AI Assistant function "
+                            f"`{function_name}` failed:\n\n"
+                            f"{type(e).__name__}: {e}"
+                        )
+
+                        break
+
+        # ----------------------------------------------------
+        # Fallback
+        # ----------------------------------------------------
+
+        if ai_response is not None:
+
+            st.chat_message(
+                "assistant"
+            ).write(
+                str(ai_response)
+            )
+
+        else:
+
+            fallback_module = loaded.get(
+                "AI Fallback"
+            )
+
+            if fallback_module:
+
+                fallback_functions = [
+                    "fallback_response",
+                    "generate_fallback",
+                    "answer",
+                    "respond",
+                    "run",
+                ]
+
+                fallback_response = None
+
+                for function_name in fallback_functions:
+
+                    function = getattr(
+                        fallback_module,
+                        function_name,
+                        None
+                    )
+
+                    if callable(function):
+
+                        try:
+
+                            fallback_response = function(
+                                user_question
+                            )
+
+                            break
+
+                        except Exception:
+                            continue
+
+                if fallback_response is not None:
+
+                    st.chat_message(
+                        "assistant"
+                    ).write(
+                        str(fallback_response)
+                    )
+
+                else:
+
+                    st.error(
+                        "❌ AI Assistant could not generate "
+                        "a response."
+                    )
+
+                    st.info(
+                        "Open System Diagnostics below "
+                        "to see the exact error."
+                    )
+
+            else:
+
+                st.error(
+                    "❌ AI Assistant and AI Fallback "
+                    "are unavailable."
+                )
+
+
+# ============================================================
+# SYSTEM DIAGNOSTICS
+# ============================================================
+
+elif page == "System Diagnostics":
+
+    st.header("🛠️ FinSight System Diagnostics")
+
+    # --------------------------------------------------------
+    # PROJECT
+    # --------------------------------------------------------
+
+    st.subheader("📁 Project")
+
+    st.write(
+        f"**Project directory:** `{BASE_DIR}`"
+    )
+
+    st.write(
+        f"**Data directory:** `{DATA_DIR}`"
+    )
+
+    # --------------------------------------------------------
+    # CSV STATUS
+    # --------------------------------------------------------
+
+    st.subheader("📂 CSV Files")
+
+    if csv_files:
+
+        st.success(
+            f"Found {len(csv_files)} CSV files."
+        )
+
+        csv_table = []
+
+        for file in csv_files:
+
+            temp_df, error = load_csv(file)
+
+            csv_table.append(
+                {
+                    "File": file.name,
+                    "Status":
+                        "✅ Loaded"
+                        if temp_df is not None
+                        else "❌ Failed",
+                    "Rows":
+                        len(temp_df)
+                        if temp_df is not None
+                        else 0,
+                    "Error":
+                        error or "",
+                }
+            )
+
+        st.dataframe(
+            pd.DataFrame(csv_table),
+            use_container_width=True
+        )
+
+    else:
+
+        st.error(
+            "No CSV files detected."
+        )
+
+    # --------------------------------------------------------
+    # MODULE STATUS
+    # --------------------------------------------------------
+
+    st.subheader("🧩 Module Status")
+
+    status_rows = []
+
+    for display_name, module_name in MODULES.items():
+
+        is_loaded = loaded.get(
+            display_name,
+            False
+        )
+
+        status_rows.append(
+            {
+                "Module": display_name,
+                "Import Path": module_name,
+                "Status":
+                    "✅ Connected"
+                    if is_loaded
+                    else "❌ Failed",
+            }
+        )
+
+    st.dataframe(
+        pd.DataFrame(status_rows),
+        use_container_width=True
+    )
+
+    # --------------------------------------------------------
+    # EXACT ERRORS
+    # --------------------------------------------------------
+
+    st.subheader("🔍 Exact Module Errors")
+
+    if st.session_state.module_errors:
+
+        for module_name, error in (
+            st.session_state.module_errors.items()
+        ):
+
+            with st.expander(
+                f"❌ {module_name}"
+            ):
+
+                st.code(
+                    error,
+                    language="text"
+                )
+
+    else:
+
+        st.success(
+            "🎉 No module import errors detected."
+        )
+
+    # --------------------------------------------------------
+    # AI DIAGNOSTICS
+    # --------------------------------------------------------
+
+    st.subheader("🤖 AI Diagnostics")
+
+    ai_modules = {
+        name: loaded.get(name, False)
+        for name in MODULES
+        if name.startswith("AI ")
+    }
+
+    for name, status in ai_modules.items():
+
+        if status:
 
             st.success(
-                "✅ AI Engine detected in the project."
+                f"✅ {name}"
+            )
+
+        else:
+
+            st.error(
+                f"❌ {name}"
+            )
+
+    # --------------------------------------------------------
+    # ENVIRONMENT
+    # --------------------------------------------------------
+
+    st.subheader("🔐 Environment")
+
+    environment_keys = [
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_GEMINI_API_KEY",
+    ]
+
+    for key in environment_keys:
+
+        found = bool(os.getenv(key))
+
+        try:
+
+            if key in st.secrets:
+                found = True
+
+        except Exception:
+            pass
+
+        if found:
+
+            st.success(
+                f"✅ {key} detected"
             )
 
         else:
 
             st.warning(
-                "⚠️ AI Engine is not connected yet."
-            )
-
-
-        if ai_assistant is not None:
-
-            st.success(
-                "✅ AI Assistant module detected."
-            )
-
-        else:
-
-            st.warning(
-                "⚠️ AI Assistant is not connected yet."
+                f"⚠️ {key} not detected"
             )
 
 
@@ -1501,9 +1559,12 @@ elif page == "AI Assistant":
 # FOOTER
 # ============================================================
 
-st.divider()
+st.sidebar.divider()
 
-st.caption(
-    "FinSight AI • Multi-Asset Quantitative Intelligence "
-    "• Risk • Indicators • Correlation • Backtesting • AI"
+st.sidebar.caption(
+    "FinSight AI • Quantitative Intelligence Platform"
+)
+
+st.sidebar.caption(
+    f"CSV files detected: {len(csv_files)}"
 )
