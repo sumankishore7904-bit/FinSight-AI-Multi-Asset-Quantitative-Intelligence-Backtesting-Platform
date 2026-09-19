@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
+import importlib
+import os
 
 st.set_page_config(
     page_title="FinSight AI",
@@ -9,299 +10,561 @@ st.set_page_config(
     layout="wide"
 )
 
-# -----------------------------
-# HEADER
-# -----------------------------
-st.title("📈 FinSight AI")
-st.caption("Multi-Asset Quantitative Intelligence & Backtesting Platform")
+# ============================================================
+# PAGE HEADER
+# ============================================================
 
-# -----------------------------
+st.title("📈 FinSight AI")
+st.subheader(
+    "Multi-Asset Quantitative Intelligence & Backtesting Platform"
+)
+
+st.caption(
+    "Market Data → Analysis → Risk → Indicators → Backtesting → "
+    "Quant Intelligence → AI Explanation"
+)
+
+# ============================================================
 # SIDEBAR
-# -----------------------------
-st.sidebar.header("⚙️ Controls")
+# ============================================================
+
+st.sidebar.title("FinSight AI")
 
 asset = st.sidebar.selectbox(
     "Select Asset",
     ["NVIDIA", "Bitcoin", "Gold"]
 )
 
-period = st.sidebar.selectbox(
-    "Analysis Period",
-    ["1 Year", "3 Years", "5 Years"]
+page = st.sidebar.radio(
+    "Navigate",
+    [
+        "Overview",
+        "Asset Analysis",
+        "Risk Analysis",
+        "Technical Indicators",
+        "Backtesting",
+        "Quant Intelligence",
+        "AI Assistant"
+    ]
 )
 
-# -----------------------------
-# DEMO DATA
-# -----------------------------
-np.random.seed(42)
+# ============================================================
+# MODULE LOADER
+# ============================================================
 
-dates = pd.date_range(
-    end=pd.Timestamp.today(),
-    periods=252
+def load_module(module_name):
+
+    possible_names = [
+        module_name,
+        module_name.lower(),
+        module_name.replace("/", "."),
+    ]
+
+    for name in possible_names:
+
+        try:
+            return importlib.import_module(name)
+
+        except Exception:
+            pass
+
+    return None
+
+
+# ============================================================
+# FIND PROJECT MODULES
+# ============================================================
+
+backend_loader = load_module("backend.data.loader")
+backend_cleaner = load_module("backend.data.cleaner")
+data_service = load_module("backend.data.data_service")
+
+asset_analysis = load_module("backend.analysis.asset_analysis")
+risk_module = load_module("backend.analysis.risk")
+indicators = load_module("backend.analysis.indicators")
+correlation = load_module("backend.analysis.correlation")
+comparison = load_module("backend.analysis.comparison")
+
+backtest_strategy = load_module("backend.backtesting.strategy")
+backtest_engine = load_module("backend.backtesting.engine")
+portfolio = load_module("backend.backtesting.portfolio")
+
+quant_engine = load_module("Intelligence.quant.quant_engine")
+regime = load_module("Intelligence.quant.regime")
+strategy_analysis = load_module(
+    "Intelligence.quant.strategy_analysis"
 )
+insights = load_module("Intelligence.quant.insights")
 
-if asset == "NVIDIA":
-    start_price = 450
-    volatility = 0.025
-elif asset == "Bitcoin":
-    start_price = 45000
-    volatility = 0.035
-else:
-    start_price = 1900
-    volatility = 0.012
+ai_engine = load_module("Intelligence.ai.ai_engine")
+ai_assistant = load_module("Intelligence.ai.assistant")
 
-returns = np.random.normal(
-    0.0005,
-    volatility,
-    len(dates)
-)
 
-prices = start_price * np.exp(np.cumsum(returns))
+# ============================================================
+# MODULE STATUS
+# ============================================================
 
-df = pd.DataFrame({
-    "Date": dates,
-    "Price": prices
-})
+with st.expander("🔧 System Module Status"):
 
-# -----------------------------
-# METRICS
-# -----------------------------
-current_price = df["Price"].iloc[-1]
+    modules = {
+        "Data Loader": backend_loader,
+        "Data Cleaner": backend_cleaner,
+        "Data Service": data_service,
+        "Asset Analysis": asset_analysis,
+        "Risk": risk_module,
+        "Indicators": indicators,
+        "Correlation": correlation,
+        "Comparison": comparison,
+        "Backtesting": backtest_engine,
+        "Quant Engine": quant_engine,
+        "Market Regime": regime,
+        "Strategy Analysis": strategy_analysis,
+        "Quant Insights": insights,
+        "AI Engine": ai_engine,
+        "AI Assistant": ai_assistant,
+    }
 
-daily_returns = df["Price"].pct_change().dropna()
+    for name, module in modules.items():
 
-volatility_value = daily_returns.std() * np.sqrt(252) * 100
+        if module is not None:
+            st.success(f"✅ {name}")
+        else:
+            st.warning(f"⚠️ {name} not connected yet")
 
-total_return = (
-    (df["Price"].iloc[-1] / df["Price"].iloc[0]) - 1
-) * 100
 
-max_drawdown = (
-    (df["Price"] / df["Price"].cummax()) - 1
-).min() * 100
+# ============================================================
+# DEMO DATA FALLBACK
+# ============================================================
 
-col1, col2, col3, col4 = st.columns(4)
+def generate_demo_data(asset_name):
 
-col1.metric(
-    "Current Price",
-    f"${current_price:,.2f}"
-)
+    np.random.seed(42)
 
-col2.metric(
-    "Total Return",
-    f"{total_return:.2f}%"
-)
-
-col3.metric(
-    "Annualized Volatility",
-    f"{volatility_value:.2f}%"
-)
-
-col4.metric(
-    "Max Drawdown",
-    f"{max_drawdown:.2f}%"
-)
-
-# -----------------------------
-# PRICE CHART
-# -----------------------------
-st.subheader(f"📊 {asset} Price Analysis")
-
-fig = go.Figure()
-
-fig.add_trace(
-    go.Scatter(
-        x=df["Date"],
-        y=df["Price"],
-        mode="lines",
-        name=asset
+    dates = pd.date_range(
+        end=pd.Timestamp.today(),
+        periods=252
     )
-)
 
-fig.update_layout(
-    xaxis_title="Date",
-    yaxis_title="Price",
-    height=450,
-    template="plotly_dark"
-)
+    if asset_name == "NVIDIA":
+        start = 450
+        volatility = 0.025
 
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
+    elif asset_name == "Bitcoin":
+        start = 45000
+        volatility = 0.035
 
-# -----------------------------
-# RISK ANALYSIS
-# -----------------------------
-st.subheader("⚠️ Risk Analysis")
+    else:
+        start = 1900
+        volatility = 0.012
 
-risk_col1, risk_col2 = st.columns(2)
+    returns = np.random.normal(
+        0.0005,
+        volatility,
+        len(dates)
+    )
 
-with risk_col1:
-    st.write("### Risk Metrics")
+    prices = start * np.exp(
+        np.cumsum(returns)
+    )
 
-    risk_data = pd.DataFrame({
-        "Metric": [
-            "Annualized Volatility",
-            "Maximum Drawdown",
-            "Average Daily Return"
-        ],
-        "Value": [
-            f"{volatility_value:.2f}%",
-            f"{max_drawdown:.2f}%",
-            f"{daily_returns.mean() * 100:.3f}%"
-        ]
+    return pd.DataFrame({
+        "Date": dates,
+        "Price": prices
     })
 
-    st.dataframe(
-        risk_data,
-        use_container_width=True,
-        hide_index=True
+
+# ============================================================
+# TRY EXISTING DATA LOADER
+# ============================================================
+
+df = None
+
+if backend_loader is not None:
+
+    # We don't assume a particular function name.
+    # The fallback keeps the app running if the loader
+    # uses a different function.
+
+    possible_functions = [
+        "load_data",
+        "load_asset_data",
+        "get_data",
+        "load_market_data"
+    ]
+
+    for function_name in possible_functions:
+
+        function = getattr(
+            backend_loader,
+            function_name,
+            None
+        )
+
+        if callable(function):
+
+            try:
+
+                df = function(asset)
+
+                if isinstance(df, pd.DataFrame):
+                    break
+
+            except Exception:
+                pass
+
+
+# ============================================================
+# FALLBACK
+# ============================================================
+
+if df is None:
+
+    df = generate_demo_data(asset)
+
+
+# ============================================================
+# NORMALIZE DATA
+# ============================================================
+
+df = df.copy()
+
+if "Date" not in df.columns:
+
+    possible_date_columns = [
+        "date",
+        "Datetime",
+        "datetime",
+        "timestamp"
+    ]
+
+    for column in possible_date_columns:
+
+        if column in df.columns:
+
+            df["Date"] = pd.to_datetime(
+                df[column]
+            )
+
+            break
+
+
+if "Price" not in df.columns:
+
+    possible_price_columns = [
+        "Close",
+        "close",
+        "Adj Close",
+        "adj_close",
+        "price"
+    ]
+
+    for column in possible_price_columns:
+
+        if column in df.columns:
+
+            df["Price"] = pd.to_numeric(
+                df[column],
+                errors="coerce"
+            )
+
+            break
+
+
+# ============================================================
+# BASIC CALCULATIONS
+# ============================================================
+
+if "Price" not in df.columns:
+
+    st.error(
+        "The selected backend data does not contain "
+        "a recognizable price column."
     )
 
-with risk_col2:
-    st.write("### Risk Level")
+    st.stop()
 
-    if volatility_value < 20:
-        risk_level = "Low"
-    elif volatility_value < 40:
-        risk_level = "Medium"
-    else:
-        risk_level = "High"
+
+df = df.dropna(subset=["Price"])
+
+df["Return"] = df["Price"].pct_change()
+
+df["SMA_20"] = (
+    df["Price"]
+    .rolling(20)
+    .mean()
+)
+
+df["SMA_50"] = (
+    df["Price"]
+    .rolling(50)
+    .mean()
+)
+
+current_price = df["Price"].iloc[-1]
+
+total_return = (
+    df["Price"].iloc[-1]
+    /
+    df["Price"].iloc[0]
+    - 1
+) * 100
+
+volatility = (
+    df["Return"]
+    .std()
+    *
+    np.sqrt(252)
+) * 100
+
+drawdown = (
+    df["Price"]
+    /
+    df["Price"].cummax()
+    - 1
+) * 100
+
+max_drawdown = drawdown.min()
+
+
+# ============================================================
+# OVERVIEW
+# ============================================================
+
+if page == "Overview":
+
+    st.header("📊 Portfolio Overview")
 
     st.info(
-        f"**{asset} Risk Level: {risk_level}**"
+        f"Currently analyzing **{asset}**"
     )
 
-# -----------------------------
-# TECHNICAL INDICATORS
-# -----------------------------
-st.subheader("📈 Technical Indicators")
+    c1, c2, c3, c4 = st.columns(4)
 
-df["SMA 20"] = df["Price"].rolling(20).mean()
-df["SMA 50"] = df["Price"].rolling(50).mean()
-
-indicator_fig = go.Figure()
-
-indicator_fig.add_trace(
-    go.Scatter(
-        x=df["Date"],
-        y=df["Price"],
-        name="Price"
-    )
-)
-
-indicator_fig.add_trace(
-    go.Scatter(
-        x=df["Date"],
-        y=df["SMA 20"],
-        name="SMA 20"
-    )
-)
-
-indicator_fig.add_trace(
-    go.Scatter(
-        x=df["Date"],
-        y=df["SMA 50"],
-        name="SMA 50"
-    )
-)
-
-indicator_fig.update_layout(
-    height=450,
-    template="plotly_dark"
-)
-
-st.plotly_chart(
-    indicator_fig,
-    use_container_width=True
-)
-
-# -----------------------------
-# QUANT INSIGHT
-# -----------------------------
-st.subheader("🧠 Quantitative Intelligence")
-
-if df["SMA 20"].iloc[-1] > df["SMA 50"].iloc[-1]:
-    signal = "Bullish trend"
-else:
-    signal = "Bearish trend"
-
-st.success(
-    f"**Quant Signal:** {signal}"
-)
-
-st.write(
-    f"""
-    FinSight AI currently detects a **{signal.lower()}**
-    based on the relationship between the 20-day and
-    50-day moving averages.
-
-    The asset's annualized volatility is approximately
-    **{volatility_value:.2f}%**, while maximum observed
-    drawdown is **{max_drawdown:.2f}%**.
-    """
-)
-
-# -----------------------------
-# BACKTESTING
-# -----------------------------
-st.subheader("🔄 Strategy Backtesting")
-
-strategy_return = total_return * 0.75
-
-backtest_col1, backtest_col2 = st.columns(2)
-
-with backtest_col1:
-    st.metric(
-        "Strategy Return",
-        f"{strategy_return:.2f}%"
+    c1.metric(
+        "Current Price",
+        f"{current_price:,.2f}"
     )
 
-with backtest_col2:
-    st.metric(
-        "Benchmark Return",
+    c2.metric(
+        "Total Return",
         f"{total_return:.2f}%"
     )
 
-# -----------------------------
-# AI ASSISTANT
-# -----------------------------
-st.subheader("🤖 FinSight AI Assistant")
+    c3.metric(
+        "Volatility",
+        f"{volatility:.2f}%"
+    )
 
-question = st.text_input(
-    "Ask about the selected asset",
-    placeholder="Example: What is the risk level of this asset?"
-)
+    c4.metric(
+        "Max Drawdown",
+        f"{max_drawdown:.2f}%"
+    )
 
-if question:
+    st.subheader(
+        f"📈 {asset} Price"
+    )
 
-    st.write("### AI Analysis")
+    st.line_chart(
+        df.set_index("Date")["Price"]
+    )
+
+
+# ============================================================
+# ASSET ANALYSIS
+# ============================================================
+
+elif page == "Asset Analysis":
+
+    st.header("📊 Asset Analysis")
+
+    st.write(
+        f"Quantitative analysis for **{asset}**"
+    )
+
+    st.dataframe(
+        df.tail(20),
+        use_container_width=True
+    )
+
+    st.line_chart(
+        df.set_index("Date")[
+            ["Price", "SMA_20", "SMA_50"]
+        ]
+    )
+
+
+# ============================================================
+# RISK
+# ============================================================
+
+elif page == "Risk Analysis":
+
+    st.header("⚠️ Risk Analysis")
+
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric(
+        "Annualized Volatility",
+        f"{volatility:.2f}%"
+    )
+
+    c2.metric(
+        "Maximum Drawdown",
+        f"{max_drawdown:.2f}%"
+    )
+
+    c3.metric(
+        "Average Return",
+        f"{df['Return'].mean() * 100:.3f}%"
+    )
+
+    st.subheader("Drawdown")
+
+    st.line_chart(
+        drawdown
+    )
+
+
+# ============================================================
+# INDICATORS
+# ============================================================
+
+elif page == "Technical Indicators":
+
+    st.header("📈 Technical Indicators")
+
+    st.line_chart(
+        df.set_index("Date")[
+            ["Price", "SMA_20", "SMA_50"]
+        ]
+    )
+
+    latest_sma20 = df["SMA_20"].iloc[-1]
+    latest_sma50 = df["SMA_50"].iloc[-1]
+
+    if latest_sma20 > latest_sma50:
+
+        st.success(
+            "Quantitative signal: SMA 20 is above SMA 50"
+        )
+
+    else:
+
+        st.warning(
+            "Quantitative signal: SMA 20 is below SMA 50"
+        )
+
+
+# ============================================================
+# BACKTESTING
+# ============================================================
+
+elif page == "Backtesting":
+
+    st.header("🔄 Strategy Backtesting")
 
     st.info(
+        "Backtesting module detected from the project "
+        "architecture. The next integration step will "
+        "connect the exact strategy and engine functions."
+    )
+
+    st.metric(
+        "Buy & Hold Return",
+        f"{total_return:.2f}%"
+    )
+
+
+# ============================================================
+# QUANT INTELLIGENCE
+# ============================================================
+
+elif page == "Quant Intelligence":
+
+    st.header("🧠 Quantitative Intelligence")
+
+    trend = "Bullish"
+
+    if (
+        df["SMA_20"].iloc[-1]
+        <
+        df["SMA_50"].iloc[-1]
+    ):
+        trend = "Bearish"
+
+    st.metric(
+        "Detected Trend",
+        trend
+    )
+
+    st.write(
         f"""
-        Based on the current quantitative analysis of
-        **{asset}**:
+        FinSight AI is analyzing:
 
-        • Trend: **{signal}**
-
-        • Annualized volatility:
-        **{volatility_value:.2f}%**
-
-        • Maximum drawdown:
-        **{max_drawdown:.2f}%**
-
-        This is a quantitative analysis generated from
-        the available market data.
+        - Asset: **{asset}**
+        - Return: **{total_return:.2f}%**
+        - Volatility: **{volatility:.2f}%**
+        - Maximum Drawdown: **{max_drawdown:.2f}%**
+        - Trend: **{trend}**
         """
     )
 
-# -----------------------------
+
+# ============================================================
+# AI ASSISTANT
+# ============================================================
+
+elif page == "AI Assistant":
+
+    st.header("🤖 FinSight AI Assistant")
+
+    question = st.text_input(
+        "Ask a question about the selected asset",
+        placeholder="What is the risk of this asset?"
+    )
+
+    if question:
+
+        st.write("### Analysis")
+
+        st.info(
+            f"""
+            Asset: **{asset}**
+
+            Current price: **{current_price:,.2f}**
+
+            Return: **{total_return:.2f}%**
+
+            Volatility: **{volatility:.2f}%**
+
+            Maximum drawdown: **{max_drawdown:.2f}%**
+
+            Your question:
+
+            **{question}**
+            """
+        )
+
+        if ai_engine is not None:
+
+            st.caption(
+                "AI engine detected in the project."
+            )
+
+        else:
+
+            st.caption(
+                "AI engine is not connected yet."
+            )
+
+
+# ============================================================
 # FOOTER
-# -----------------------------
+# ============================================================
+
 st.divider()
 
 st.caption(
-    "FinSight AI • Quantitative Intelligence • "
-    "Risk Analysis • Backtesting • AI Insights"
+    "FinSight AI | Quantitative Finance | "
+    "Risk | Backtesting | AI Intelligence"
 )
